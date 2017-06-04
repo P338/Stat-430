@@ -1,0 +1,983 @@
+---
+title: "Stat 430-Final Report"
+authors: "Prentice Mui, Kobe Ng, Xiaolong Shen"
+date: "May 8, 2017"
+output: html_document
+---
+
+---
+title: "Stat 430-Final Report"
+authors: "Prentice Mui, Kobe Ng, Xiaolong Shen"
+date: "May 7, 2017"
+output: html_document
+---
+
+# Introduction
+
+
+## Dataset used
+Complete FIFA 2017 Player dataset (Global)
+
+
+## Description and Objectives
+
+This dataset is taken from Kaggle, which was in turn scraped from fifaindex.com. The dataset describes various FIFA athletes from the videogame FIFA 17 and their associated attriutes. The original dataset contains 53 variables, with continuous variables describing the athlete's skill and physical attributes, along with some categorical predictors describing aspects such as nationality, date joined, Club, etc...
+The unedited dataset contains 17588 observations. 
+
+
+Our objectives consist of regression and classification. For the regression portion, we will attempt to use various subset methods to first shrink the dimension space and parse out the most influential predictors then apply varied regression methods to predict overall player rating.  The objective is to see which model and predictors does best in predicting which is determined by a low RMSE value.
+
+For the classification portion, we will also attempt to use a selection of predictors and methods to produce the highest accuracy. The reduced model with the highest accuracy will be used. We will attempt to classify a newly created varible called "Elite_Origin". "Elite_Origin" has 4 classes indicating whether the athlete comes from Europe/Americas and whether or not they have an overall rating of 90 or higher. Some athletes that did not come from Europe/Americas were omitted, in order to perform simpler and clearer classifications. The goal here is to see how well machine learning classifies players based not only on the skill level, but also determing where they are from.
+
+The overarching reason for performing regression and classification on this data set is to get a better understanding of Fifa players.  Namely, in regression we wish to determine which few attributes are most important in giving an accuracte estimation of a player's ratings and in classification we similar wish to see which ratings are indicative of elite players from a certain region.  Obviously all skill and physical factors determine a player's hollistic evaluation but many only do so marginally.  If the goal was for minimal RMSE and maximal accuracy, larger models would be appropriate, though our goal is more aimed towards a balance between precision and intepretability which requires comparatively well fitting models that are pruned down to a manageable size.
+
+
+# Methods
+
+We will first perform classification on Elite_Origin. Let us load and clean the data first.
+
+
+```{r setup, include=FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r,message=FALSE,warning=FALSE}
+library(readr)
+library(tibble)
+library(caret)
+library(countrycode)
+library(leaps)
+library(nnet)
+library(glmnet)
+library(randomForest)
+library(klaR)
+library(gbm)
+```
+
+
+_Clean Data_
+```{r}
+set.seed(3)
+football = read.csv("/Users/paul/Desktop/Stat430/Final_Project/FullData.csv", 
+                    header = TRUE, sep = ",")
+football_class = as_tibble(football)
+
+# Removed Goalkeeping ratings and categorical predictors except nationality
+football_class = football[, c(2, 15, 9:13, 19:47)]
+football_class = na.omit(football_class)
+
+# Convert height and weight to numeric
+Height = as.numeric(substr(football_class$Height, 1, 3))
+Weight = as.numeric(substr(football_class$Weight, 1, 3))
+football_class$Height = Height
+football_class$Weight = Weight
+
+# Create continent variable based on nationality origin
+Continent = countrycode(football_class$Nationality, "country.name", "continent")
+football_class$Continent = Continent
+
+# Class Great Britain states as Europe
+for (i in 1:nrow(football_class)){
+  if (football_class$Nationality[i] == "England" || 
+      football_class$Nationality[i] == "Northern Ireland" ||
+      football_class$Nationality[i] == "Scotland" || 
+      football_class$Nationality[i] == "Wales") {
+        football_class$Continent[i] = "Europe"
+  }
+}
+
+# Only choose the players from the Americas or Europe
+football_class = football_class[!is.na(football_class$Continent), ]
+football_class = subset(football_class, football_class$Continent == "Europe" || 
+                    football_class$Continent == "Americas")
+football_class = football_class[c(which(football_class$Continent == "Europe"), 
+                    which(football_class$Continent == "Americas")), ]
+
+# Create the response variable Elite_Origin which has four levels created from rating over 90 & continent
+for (i in 1:nrow(football_class)){
+  if (football_class$Rating[i] >=  90 & football_class$Continent[i] == "Europe"){
+    football_class$Elite_Origin[i] = 1
+  }
+  else if (football_class$Rating[i] >= 90 & football_class$Continent[i] == "Americas"){
+    football_class$Elite_Origin[i] = 2
+  }
+  else if (football_class$Rating[i] < 90 & football_class$Continent[i] == "Europe"){
+    football_class$Elite_Origin[i] = 3
+  }
+  else if (football_class$Rating[i] < 90 & football_class$Continent[i] == "Americas"){
+    football_class$Elite_Origin[i] = 4
+  }
+}
+football_class$Elite_Origin = as.factor(football_class$Elite_Origin)
+# Remove rating, nationality and continent
+football_class = football_class[, c(-1, -4, -37)]
+
+# Test train split the data at 75/25 
+football_class_idx = createDataPartition(football_class$Elite_Origin, p = 0.75, list = FALSE)
+football_class_trn = football_class[football_class_idx, ]
+football_class_tst = football_class[-football_class_idx, ]
+head(football_class, 15)
+accuracy = function(actual, predicted) {
+  mean(actual == predicted)
+}
+```
+
+ We created two new variables here, Continent, and Elite_Origin. (Continent is needed to create Elite_Origin.) Some categorical variables like Name, National_Kit, Club-Joining, and Club_Kit that we believe to be irrelevant and confusing are removed, along with  continuous variables that are goal-keeping related characteristics. We removed goal-keeping related variables because not all players are goalkeepers, so players that are not goalkeepers would suffer a huge penalty to goalkeeping characteristics. We then remove Nationality,Rating,and Continent, as they relate directly to Elite_origin. 
+ 
+ 
+ The data is then split 75-25, with a 75% training set. After data cleaning, the training set contains 10879 observations, and 3623 obs in the test set.
+ 
+ 
+ 
+ 
+ 
+ _Variable Selection_
+```{r}
+# Multinomial Regression(Additive models)
+null_multi = multinom(Elite_Origin ~ 1, 
+                     data = football_class_trn, trace = FALSE)
+add_multi = multinom(Elite_Origin ~ ., 
+                     data = football_class_trn, trace = FALSE)
+# Additive Multinomial Model Accuracy
+add_multi_accuracy = accuracy(actual = football_class_tst$Elite_Origin, 
+                              predicted = predict(add_multi, newdata = football_class_tst))
+
+### AIC (1st set of variables, from stepwise AIC selection, commented out because of time)
+# full_mod_select = step(object = null_multi, 
+#                    scope = list(lower = null_multi, upper = add_multi),
+#                      direction = "forward")
+# save(full_mod_select, file = "full_mod_select.Rda")
+## AIC Selected Vars : Contract_Expiry + Age + Height + Balance + Reactions + Heading +
+#                        Ball_Control + Skill_Moves + Strength + Aggression + Weight +
+#                          Curve + Jumping + Penalties + Finishing + Speed + Crossing +
+#                          Composure + Long_Pass
+
+
+### Best Regsubsets Cp (2nd set of variables, from Cp selection)
+subset_select_class = regsubsets(Elite_Origin ~ ., 
+                                 data = football_class_trn, 
+                                 method = "exhaustive", 
+                                 nvmax = 35)
+which.min(summary(subset_select_class)$cp)
+summary(subset_select_class)$which[25,]
+
+## Cp Selected Vars : Age + Contract_Expiry + Height + Weight + Skill_Moves + Ball_Control +
+#                       Dribbling + Marking + Standing_Tackle + Aggression + Reactions +
+#                         Composure + Crossing + Short_Pass + Long_Pass + Acceleration +
+#                           Speed + Strength + Balance + Jumping + Heading + Shot_Power +
+#                             Finishing + Long_Shots + Curve + Penalties
+
+######################################################################################################
+# This section can be ignored; performs stepwise selection on first set of selected variables
+
+# select_class_mod = multinom(Elite_Origin ~ Age + Contract_Expiry + Height + Weight + Skill_Moves + 
+#                              Ball_Control + Dribbling + Marking + Standing_Tackle + Aggression + 
+#                              Reactions + Composure + Crossing + Short_Pass + Long_Pass + 
+#                              Acceleration + Speed + Strength + Balance + Jumping + Heading + 
+#                              Shot_Power + Finishing + Long_Shots + Curve + Penalties, 
+#                     data = football_class_trn, trace = FALSE)
+  
+# step(select_class_mod, direction = "backward")
+######################################################################################################
+
+# Subset Selection by least decrease in Cp (3rd set of variables, from Cp again)
+# (Chose subset at which Cp decreased by the a significantly lower amount)
+subset_select_class = regsubsets(Elite_Origin ~ ., 
+                                 data = football_class_trn, 
+                                 method = "exhaustive", 
+                                 nvmax = 35)
+summary(subset_select_class)$cp
+cp_diff = c(rep(0,35))
+for (i in 1:35){
+  cp_diff[i] = summary(subset_select_class)$cp[i + 1] - summary(subset_select_class)$cp[i]
+}
+plot(x = 1:34, y = summary(subset_select_class)$cp)
+cp_diff
+summary(subset_select_class)$which[6,]
+# Subset Selected Variables : Age + Contract_Expiry + Height + Ball_Control + Balance + Heading
+```
+ 
+ 
+ 
+ We first perform variable selection to pick out the best predictors, since the dataset contains a large amount of variables. We first fit a null multinomial model, and then an additive multinomial model, and then perform AIC forward selection. 19 variables were chosen with this method.
+ 
+ We then use Best Regsubsets Cp to find an alternative way to select variables. 26 varaibles were chosen with this method.
+ 
+ Finally, variable selection was done by looking at where CP begins to decrease much slower. 6 variables were chosen this way. The cp dropoff graph and the chosen variables are shown above.
+ 
+ We will use a variety of methods, with each method using the the 3 different sets of selected variables. The model with the highest classification rate will be our final model.
+ 
+ 
+ Now,let's test the different models.
+ 
+ 
+ 
+ 
+ We first use Multinomial Logistic, as there are more than 2 classes in Elite_Origin.  It is a parametric and discriminant method.
+ 
+### Multinomial-CP Dropoff
+
+```{r,results='hide'}
+set.seed(3)
+#multi_1 = train(Elite_Origin ~ Contract_Expiry + Height + Age + Balance + Heading +
+                          #Ball_Control,
+       # data = football_class_trn,
+        #trControl = trainControl(method = "cv", number = 5),
+        #method = "multinom")
+#save(multi_1, file = "multi_1.Rda")
+load("multi_1.Rda")
+multi_1_accuracy = accuracy(actual = football_class_tst$Elite_Origin, 
+                              predicted = predict(multi_1, newdata = football_class_tst))
+```
+
+ 
+```{r}
+multi_1_accuracy
+```
+
+
+### Multinomial - AIC
+
+```{r,results='hide'}
+set.seed(3)
+# multi_2 = train(Elite_Origin~Contract_Expiry + Age + Height + Balance + Reactions + Heading +
+                          # Ball_Control + Skill_Moves + Strength + Aggression + Weight +
+                          # Curve + Jumping + Penalties + Finishing + Speed + Crossing +
+                          # Composure + Long_Pass,
+              # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "multinom")
+# save(multi_2, file = "multi_2.Rda")
+load("multi_2.Rda")
+
+```
+
+```{r}
+multi_2_accuracy = accuracy(actual = football_class_tst$Elite_Origin, 
+                              predicted = predict(multi_2, newdata = football_class_tst))
+```
+
+
+
+```{r}
+multi_2_accuracy
+```
+
+
+### Multinomial- Best Regsubsets CP
+
+```{r,results='hide'}
+set.seed(3)
+# multi_3 = train(Elite_Origin~Age + Contract_Expiry + Height + Weight + Skill_Moves + 
+                             # Ball_Control + Dribbling + Marking + Standing_Tackle + Aggression + 
+                             # Reactions + Composure + Crossing + Short_Pass + Long_Pass + 
+                             # Acceleration + Speed + Strength + Balance + Jumping + Heading + 
+                             # Shot_Power + Finishing + Long_Shots + Curve + Penalties,
+              # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "multinom")
+# save(multi_3, file = "multi_3.Rda")
+load("multi_3.Rda")
+multi_3_accuracy= accuracy(actual = football_class_tst$Elite_Origin, 
+                              predicted = predict(multi_3, newdata = football_class_tst))
+```
+
+```{r}
+multi_3_accuracy
+```
+
+
+ We then use Naive Bayes, which assumes that the predictors are independent It is a form of generative parametric method.
+
+### Naive Bayes- Cp Dropoff
+
+```{r,message=FALSE,warning=FALSE}
+set.seed(3)
+# naive_bayes_1 = train(Elite_Origin ~ Contract_Expiry + Height + Age + 
+#                                       Balance + Heading + Ball_Control,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "nb"
+# )
+# save(naive_bayes_1, file = "naive_bayes_1.Rda")
+load("naive_bayes_1.Rda")
+nb1_accuracy = accuracy(actual = football_class_tst$Elite_Origin, predicted = predict(naive_bayes_1, newdata = football_class_tst))
+```
+
+
+```{r}
+nb1_accuracy
+```
+
+### Naive bayes- AIC
+
+```{r,message=FALSE,warning=FALSE}
+set.seed(3)
+# naive_bayes_2 = train(Elite_Origin ~ Contract_Expiry + Age + Height + Balance + Reactions + Heading +
+                         # Ball_Control + Skill_Moves + Strength + Aggression + Weight +
+                         # Curve + Jumping + Penalties + Finishing + Speed + Crossing +
+                         # Composure + Long_Pass,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "nb"
+# )
+# save(naive_bayes_2, file = "naive_bayes_2.Rda")
+load("naive_bayes_2.Rda")
+nb2_accuracy = accuracy(actual = football_class_tst$Elite_Origin, predicted = predict(naive_bayes_2, newdata = football_class_tst))
+```
+
+
+
+```{r}
+nb2_accuracy
+```
+
+### Naive Bayes- Best Regsubsets Cp
+
+```{r,message=FALSE,warning=FALSE}
+set.seed(3)
+# naive_bayes_3 = train(Elite_Origin ~ Age + Contract_Expiry + Height + Weight + Skill_Moves + 
+                              # Ball_Control + Dribbling + Marking + Standing_Tackle + Aggression + 
+                              # Reactions + Composure + Crossing + Short_Pass + Long_Pass + 
+                              # Acceleration + Speed + Strength + Balance + Jumping + Heading + 
+                              # Shot_Power + Finishing + Long_Shots + Curve + Penalties,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "nb"
+# )
+# save(naive_bayes_3, file = "naive_bayes_3.Rda")
+load("naive_bayes_3.Rda")
+nb3_accuracy = accuracy(actual = football_class_tst$Elite_Origin, predicted = predict(naive_bayes_3, newdata = football_class_tst))
+
+```
+
+
+```{r}
+nb3_accuracy
+```
+
+
+We then use RDA, which is a combination of LDA and QDA. It is a generative, parametric method. A tune length of 6 will be used.
+
+
+
+### RDA-CP Dropoff
+
+```{r,message=FALSE,warning=FALSE}
+set.seed(3)
+# rda_1 = train(Elite_Origin ~ Contract_Expiry + Height + Age + 
+#                               Balance + Heading + Ball_Control ,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "rda",
+        # tuneLength = 6
+# )
+# save(rda_1, file = "rda_1.Rda")
+load("rda_1.Rda")
+rda_1_accuracy = accuracy(actual = football_class_tst$Elite_Origin, 
+                        predicted = predict(rda_1, newdata = football_class_tst))
+```
+
+```{r}
+rda_1_accuracy
+```
+
+
+
+
+### RDA-AIC
+
+```{r,message=FALSE,warning=FALSE}
+set.seed(3)
+# rda_2 = train(Elite_Origin ~ Contract_Expiry + Age + Height + Balance + Reactions + Heading +
+                          # Ball_Control + Skill_Moves + Strength + Aggression + Weight +
+                          # Curve + Jumping + Penalties + Finishing + Speed + Crossing +
+                          # Composure + Long_Pass,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "rda",
+        # tuneLength = 6
+# )
+
+# save(rda_2, file = "rda_2.Rda")
+load("rda_2.Rda")
+rda_2_accuracy = accuracy(actual = football_class_tst$Elite_Origin, 
+                        predicted = predict(rda_2, newdata = football_class_tst))
+```
+
+```{r}
+rda_2_accuracy
+```
+
+
+### RDA- Best Regsubsets CP
+
+
+```{r,message=FALSE,warning=FALSE}
+set.seed(3)
+# rda_3 = train(Elite_Origin ~ Age + Contract_Expiry + Height + Weight + Skill_Moves + 
+                              # Ball_Control + Dribbling + Marking + Standing_Tackle + Aggression + 
+                              # Reactions + Composure + Crossing + Short_Pass + Long_Pass + 
+                              # Acceleration + Speed + Strength + Balance + Jumping + Heading + 
+                              # Shot_Power + Finishing + Long_Shots + Curve + Penalties,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "rda",
+        # tuneLength = 6
+# )
+
+# save(rda_3, file = "rda_3.Rda")
+load("rda_3.Rda")
+rda_3_accuracy = accuracy(actual = football_class_tst$Elite_Origin, 
+                        predicted = predict(rda_3, newdata = football_class_tst))
+```
+
+
+```{r}
+rda_3_accuracy
+```
+
+
+
+ 
+We then use Random forest, which is a discriminant, non-parametric model. Random forests is a good idea since they decorrelate the trees.  We will use a grid of mtrys from 1 to 6. Out of bag will be used to reduce compuational intesnsity
+
+### Random Forest- CP Dropoff
+
+```{r}
+set.seed(3)
+# rf1 = train(Elite_Origin ~ Age + Contract_Expiry + Height + Ball_Control + Balance + Heading,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "oob"),
+        # method = "rf",
+        # tuneGrid = expand.grid(mtry = c(1:6))
+# )
+# save(rf1, file = "rf1.Rda")
+load("rf1.Rda")
+rf1_accuracy=accuracy(actual = football_class_tst$Elite_Origin, 
+         predicted = predict(rf1, newdata = football_class_tst))
+```
+
+```{r}
+rf1$bestTune
+```
+best mtry=1
+
+```{r}
+rf1_accuracy
+```
+
+
+### Random Forest-AIC
+
+```{r}
+set.seed(3)
+# rf2 = train(Elite_Origin ~ Contract_Expiry + Age + Height + Balance + Reactions + Heading +
+                          # Ball_Control + Skill_Moves + Strength + Aggression + Weight +
+                          # Curve + Jumping + Penalties + Finishing + Speed + Crossing +
+                          # Composure + Long_Pass,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "oob"),
+        # method = "rf",
+        # tuneGrid = expand.grid(mtry = c(1:6))
+# )
+# save(rf2, file = "rf2.Rda")
+load("rf2.Rda")
+rf2_accuracy=accuracy(actual = football_class_tst$Elite_Origin, 
+         predicted = predict(rf2, newdata = football_class_tst))
+```
+
+```{r}
+rf2$bestTune
+```
+
+best mtry=5
+
+```{r}
+rf2_accuracy
+```
+
+
+### Random Forest- Best Regsubsets CP
+
+```{r}
+set.seed(3)
+# rf3 = train(Elite_Origin ~  Age + Contract_Expiry + Height + Weight + Skill_Moves + 
+                              # Ball_Control + Dribbling + Marking + Standing_Tackle + Aggression + 
+                              # Reactions + Composure + Crossing + Short_Pass + Long_Pass + 
+                              # Acceleration + Speed + Strength + Balance + Jumping + Heading + 
+                              # Shot_Power + Finishing + Long_Shots + Curve + Penalties,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "oob"),
+        # method = "rf",
+        # tuneGrid = expand.grid(mtry = c(1:6))
+# )
+# save(rf3, file = "rf3.Rda")
+load("rf3.Rda")
+rf3_accuracy=accuracy(actual = football_class_tst$Elite_Origin, 
+         predicted = predict(rf3, newdata = football_class_tst))
+```
+
+```{r}
+rf3$bestTune
+```
+
+best mtry=6
+
+
+```{r}
+rf3_accuracy
+```
+
+
+
+Finally, we use a boosted model to potentially avoid overfitting. Boosting, like random forests, is a discriminant, non-parametric model. Here are the following tuning parameters.
+
+
+```{r}
+gbm_grid = expand.grid(interaction.depth = c(1:5),
+                       n.trees = c(300, 500),
+                       shrinkage = c(0.001, 0.01, 0.1),
+                       n.minobsinnode = 10)
+```
+
+
+### Boosted model- AIC 
+
+```{r}
+# boost_class1 = train(Elite_Origin ~ Contract_Expiry + Age + Height + Balance + Reactions + Heading +
+                       # Ball_Control + Skill_Moves + Strength + Aggression + Weight +
+                        # Curve + Jumping + Penalties + Finishing + Speed + Crossing +
+                         # Composure + Long_Pass,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "gbm",
+        # tuneGrid = gbm_grid
+# )
+
+load(file = "boost_class1.Rda")
+```
+
+
+```{r}
+boost1accuracy = accuracy(actual = football_class_tst$Elite_Origin, 
+                          predicted = predict(boost_class1, newdata = football_class_tst))
+```
+
+
+
+```{r}
+boost_class1$bestTune
+```
+
+
+
+```{r}
+boost1accuracy
+```
+
+
+### Boosted model- Best RegSubsets CP
+
+```{r}
+# boost_class2 = train(Elite_Origin ~ Age + Contract_Expiry + Height + Weight + Skill_Moves + 
+                                      # Ball_Control + Dribbling + Marking + Standing_Tackle + 
+                                        # Aggression + Reactions + Composure + Crossing + Short_Pass + 
+                                         # Long_Pass + Acceleration + Speed + Strength + Balance + 
+                                           # Jumping + Heading + Shot_Power + Finishing + Long_Shots + 
+                                              # Curve + Penalties,
+       # data = football_class_trn,
+       # trControl = trainControl(method = "cv", number = 5),
+       # method = "gbm",
+       # tuneGrid = gbm_grid
+#)
+
+load("boost_class2.Rda")
+```
+
+
+```{r}
+boost2accuracy = accuracy(actual = football_class_tst$Elite_Origin, 
+                          predicted = predict(boost_class2, newdata = football_class_tst))
+```
+
+```{r}
+boost_class2$bestTune
+```
+
+```{r}
+boost2accuracy
+```
+
+
+### Boosted model- CP dropoff
+
+
+```{r}
+# boost_class3 = train(Elite_Origin ~ Age + Contract_Expiry + Height + 
+#                                     Ball_Control + Balance + Heading,
+        # data = football_class_trn,
+        # trControl = trainControl(method = "cv", number = 5),
+        # method = "gbm",
+        # tuneGrid = gbm_grid
+# )
+
+load("boost_class3.Rda")
+```
+
+```{r}
+boost3accuracy = accuracy(actual = football_class_tst$Elite_Origin, predicted = 
+           predict(boost_class3, newdata = football_class_tst))
+```
+
+```{r}
+boost_class3$bestTune
+```
+
+```{r}
+boost3accuracy
+```
+
+
+We will now perform regression on Rating. Let us load and clean the data first.
+
+```{r}
+set.seed(3)
+football = read.csv("/Users/paul/Desktop/Stat430/Final_Project/FullData.csv", 
+                    header = TRUE, sep = ",")
+
+# Modify the data set for regression
+# Get rid of the interceptions column, and select the rating, nationality, and continuous variables other than the goalkeeping ratings
+football = football[, !names(football) %in% c("Interceptions")]
+football_reg = football[, c(2, 15, 9:13, 17:47)]
+football_reg = na.omit(football_reg)
+
+# Change height and weight to numeric
+Height = as.numeric(substr(football_reg$Height, 1, 3))
+Weight = as.numeric(substr(football_reg$Weight, 1, 3))
+football_reg$Height = Height
+football_reg$Weight = Weight
+
+# Add the continent column
+Continent = countrycode(football_reg$Nationality, "country.name", "continent")
+football_reg$Continent = Continent
+for (i in 1:nrow(football_reg)){
+  if (football_reg$Nationality[i] == "England" || 
+      football_reg$Nationality[i] == "Northern Ireland" ||
+      football_reg$Nationality[i] == "Scotland" || 
+      football_reg$Nationality[i] == "Wales") {
+        football_reg$Continent[i] = "Europe"
+  }
+}
+
+# Keep only the continents of Americas and Europe 
+football_reg = football_reg[!is.na(football_reg$Continent), ]
+football_reg = subset(football_reg, football_reg$Continent == "Europe" || 
+                    football_class$Continent == "Americas")
+football_reg = football_reg[c(which(football_reg$Continent == "Europe"), 
+                    which(football_reg$Continent == "Americas")), ]
+head(as_tibble(football_reg))
+football_reg = football_reg[, c(-1, -8)]
+football_reg_idx = createDataPartition(football_reg$Rating, p = 0.75, list = FALSE)
+football_reg_trn = football_reg[football_reg_idx, ]
+football_reg_tst = football_reg[-football_reg_idx, ]
+head(football_reg_trn)
+head(football_reg_tst)
+rmse = function(actual, predicted) {
+  sqrt(mean((actual - predicted) ^ 2))
+}
+```
+
+
+```{r}
+rmse = function(actual, predicted) {
+  sqrt(mean((actual - predicted) ^ 2))
+}
+```
+
+The data cleaning for regression is similar to the process in classification.  The biggest difference is that we removed the Interceptions continuous variable as we found that for some particular reason, predicting a glmnet model with that variable intact yielded dimensionality errors. We then eliminated the aforementioned categorical variable such as Nationality, Club_Kit, Position, DOB, etc... We also created a Continent variable to indicate if the player is from Europe/America. Some players that are not from these regions are omitted. The cleaned dataset has 37 variables, with 10878 obs in the training set, and 3624 in the test set. (75-25 split)
+
+### Additive linear model
+
+```{r}
+set.seed(3)
+add_lm = train(Rating ~ .,
+        data = football_reg_trn,
+        trControl = trainControl(method = "cv", number = 5),
+        method = "lm"
+)
+add_lm_rmse = rmse(actual = football_reg_tst$Rating, 
+                       predicted = predict(add_lm, newdata = football_reg_tst))
+```
+
+```{r}
+add_lm_rmse
+```
+
+
+### Additive glmnet
+
+```{r}
+set.seed(3)
+add_glmnet = train(form = Rating ~ .,
+             data = football_reg_trn,
+             method = "glmnet",
+             preProcess = c("scale", "center"),
+             trControl = trainControl(method = "cv", number = 5),
+             tuneLength = 5
+)
+add_glmnet_rmse = rmse(actual = football_reg_tst$Rating, 
+                           predicted = predict(add_glmnet, newdata = football_reg_tst))
+```
+
+
+```{r}
+add_glmnet_rmse
+```
+
+
+ We use lasso as the first step to select variables for regression. After using lasso, we will then use the selected variables from lasso to perform regsubsets, to further select a smaller subset of variables. The variables from regsubsets will be used.
+ 
+ 
+ 
+```{r}
+# Using lasso to perform variable selection
+# X = model.matrix(Rating ~ ., football_reg_trn)[, -1]
+# y = football_reg_trn$Rating
+# fit_lasso = glmnet(X, y, alpha = 1)
+# fit_lasso_cv = cv.glmnet(X, y, alpha = 1)
+# coef(fit_lasso_cv)
+
+## Lasso Selected Vars : Age + Contract_Expiry + Height + Weight + Preffered_Foot + Weak_foot +
+#                         Skill_Moves + Ball_Control + Sliding_Tackle + Aggression + Reactions +
+#                           Attacking_Position + Vision + Composure + Crossing + Short_Pass + 
+#                             Long_Pass + Acceleration + Speed + Stamina + Strength + Balance +
+#                               Agility + Jumping + Heading + Penalties
+```
+
+
+```{r}
+# Subset selection on the lasso selected variables
+subset_select_reg = regsubsets(Rating ~ Age + Contract_Expiry + Height + Weight + Preffered_Foot + 
+                               Weak_foot + Skill_Moves + Ball_Control + Sliding_Tackle + Aggression + 
+                               Reactions + Attacking_Position + Vision + Composure + Crossing + 
+                               Short_Pass + Long_Pass + Acceleration + Speed + Stamina + 
+                               Strength + Balance + Agility + Jumping + Heading + Penalties, 
+                               data = football_reg_trn, nvmax = 26, method = "exhaustive")
+# summary(subset_select_reg)$cp
+cp_diff = c(rep(0,25))
+for (i in 1:25){
+  cp_diff[i] = summary(subset_select_reg)$cp[i + 1] - summary(subset_select_reg)$cp[i]
+}
+plot(x = 1:26, y = summary(subset_select_reg)$cp)
+##cp_diff
+summary(subset_select_reg)$which[13,]
+
+## Cp Subset Selected Vars : Age + Height + Ball_Control + Sliding_Tackle + Reactions +
+#                             Attacking_Position + Vision + Composure + Short_Pass +
+#                               Speed + Strength + Jumping + Heading
+```
+
+
+We will fit a regular linear model first.
+
+
+### Linear model-reduced
+
+```{r}
+set.seed(3)
+red_lm = train(form = Rating ~ Age + Height + Ball_Control + Sliding_Tackle + Reactions +
+                                  Attacking_Position + Vision + Composure + Short_Pass +
+                                    Speed + Strength + Jumping + Heading,
+             data = football_reg_trn,
+             method = "lm",
+             trControl = trainControl(method = "cv", number = 5)
+)
+red_lm_rmse = rmse(actual = football_reg_tst$Rating, 
+                       predicted = predict(red_lm, newdata = football_reg_tst))
+```
+
+```{r}
+red_lm_rmse
+```
+
+
+
+We then use glmnet, which utilizes a mixture of the ridge and penalized regressions.  Glmnet is a linear, parametric, and discriminant method. A tune length of 10 will be used.
+
+
+
+
+
+### Reduced glmnet
+
+```{r}
+set.seed(3)
+red_glmnet = train(form = Rating ~ Age + Height + Ball_Control + Sliding_Tackle + Reactions +
+                                    Attacking_Position + Vision + Composure + Short_Pass +
+                                    Speed + Strength + Jumping + Heading,
+             data = football_reg_trn,
+             method = "glmnet",
+             trControl = trainControl(method = "cv", number = 5),
+             tuneLength = 10
+)
+red_glmnet_rmse = rmse(actual = football_reg_tst$Rating, predicted = predict(red_glmnet, newdata = football_reg_tst))
+```
+
+
+
+```{r}
+red_glmnet$bestTune
+```
+Best alpha=0.4, best lambda=0.006369861
+
+
+
+```{r}
+red_glmnet_rmse
+```
+
+
+
+We then used a random forest model, with mtry from 1 to 4 since 1/3 of 13 is roughly 4 which is the standard mtry for out of bag random forest model. Random forests might be a good idea as they decorrelate the trees.
+
+
+### Reduced random forest
+
+```{r}
+# rf_reg = train(form = Rating ~ Age + Height + Ball_Control + Sliding_Tackle + Reactions +
+                                 # Attacking_Position + Vision + Composure + Short_Pass +
+                                   # Speed + Strength + Jumping + Heading,
+             # data = football_reg_trn,
+             # method = "rf",
+             # trControl = trainControl(method = "oob"),
+             # tuneGrid = expand.grid(mtry = c(1:4))
+# )
+# save(rf_reg, file = "rf_reg.Rda")
+load("rf_reg.Rda")
+
+```
+
+
+```{r}
+rf_reg$bestTune
+```
+
+best mtry=4
+
+```{r}
+rf_reg_rmse = rmse(actual = football_reg_tst$Rating, 
+                   predicted = predict(rf_reg, newdata = football_reg_tst))
+```
+
+
+
+
+```{r}
+rf_reg_rmse
+```
+
+
+Finally, a boosted model will be used to avoid overfitting.
+
+
+### Reduced Boosted Regression
+
+```{r}
+# boost_reg = train(form = Rating ~ Age + Height + Ball_Control + Sliding_Tackle + Reactions +
+                                  # Attacking_Position + Vision + Composure + Short_Pass +
+                                   # Speed + Strength + Jumping + Heading,
+            # data = football_reg_trn,
+            # method = "gbm",
+            # trControl = trainControl(method = "cv", number = 5),
+            # tuneGrid = gbm_grid
+# )
+# save(boost_reg, file = "boost_reg.Rda")
+load("boost_reg.Rda")
+
+
+boost_reg$bestTune
+
+```
+
+
+
+
+```{r}
+boost_reg_rmse = rmse(actual = football_reg_tst$Rating, 
+                      predicted = predict(boost_reg, newdata = football_reg_tst))
+```
+
+
+```{r}
+boost_reg_rmse
+```
+
+
+# Results
+
+| Classification Methods   | Test Accuracy |       
+|--------------------------|---------------|
+| Multinomial-Additive     | 0.7399945     |
+| Multinomial-CP dropoff   | 0.7855368     |
+| Multinomial-AIC          | 0.7905051     |
+| Multinomial-Regsubsets   | 0.7907811     |
+| Naive Bayes-CP dropoff   | 0.7557273     |
+| Naive Bayes-AIC          | 0.7441347     |
+| Naive Bayes-Regsubsets   | 0.7264698     |
+| RDA-CP Dropoff           | 0.7871929     |
+| RDA-AIC                  | 0.7946453     |
+| RDA-Regsubsets           | 0.7960254     |
+| Random Forest-CP dropoff | 0.8023737     |
+| Random Forest-AIC        | 0.807894      |
+| Random Forest-Regsubsets | 0.8106542     |
+| Boosted Model-AIC        | 0.8341154     |
+| Boosted Model-Regsubsets | 0.8125863     |
+| Boosted Model-CP dropoff | 0.7996136     | 
+
+
+
+
+
+| Regression Methods    | Test RMSE |
+|-----------------------|-----------|
+| Additive Linear Model | 3.483872  |
+| Additive glmnet       | 3.483168  |
+| Reduced Linear        | 3.527051  |
+| Reduced glmnet        | 3.52619   |
+| Reduced Random Forest | 1.315178  |
+| Reduced Boosted       | 1.868954  |
+
+
+### Best classification model: Boosted Model with forward AIC selected variables. 
+### Test Accuracy= 0.8341154
+
+
+### Best Regression model : Reduced Random Forest
+### Test RMSE = 1.315178
+
+
+
+
+# Discussion_Classification
+For the classification section, we see that the boosted model with forward AIC selected variables performed the best. The reason we suspect that AIC boost performed better than the Regsubsets/CP dropoff might be because there are too little variables (6) to explain enough predictibility for the response variable in the CP dropoff model, but the are are too many variables (26) in the Regsubsets model, which might overfit the data. Since a boosted model "learns slowly", it might be better to figure out how to classify a variable that might not have too much intrinsic connection, as Elite_Origin tells whether or not a player is from Europe/America and whether or not they have a rating of 90 or higher. 
+
+Notice that Naive Bayes performed much more poorly than the other models. This is probably because the variables are very related (the dataset describes many attributes of a player, with the attributes  themselves being fairly related to one another.) Naive Bayes won't work well here, as they assume the predictors are constant.
+
+Compared to the additive model, each of the subsets, irrespective of the method fit to it, performed much better than the additive.  This notion validates our initial classification purpose.  Using a full model to predict rating and origin overfits and can be greatly improved at the benefit of reducing the subspace from 35 variables down to 19.   
+
+
+# Discussion_Regression
+For the regression section, we see that the Reduced Random Forest performed much better than the other methods. This makes sense, as Random Forests decorrelates the tree. Decorrelation helps as the predictors are fairly related to another.  
+
+The reduced ensemble methods both greatly reduced the RMSE as compared to the full additive model, so the goal of finding a smaller fitting model was feasibly achieved.  We see that processing the data through variable selection allowed us to shrink an intial full model of 37 variables down to almost 1/3 retaining only 13 while decreasing RMSE by roughly 2 rating points.  Although 2 rating points may seem nominal, in actuality, 2 points difference in overall rating really can mean the difference between a good player vs a great player.  Also since there many players with similar ratings, it's essential to be able distinguish each rating even if they're only a few points different.  Tying the final model results back to data, we see that the final model consists of an equal mix of skill variables such as Ball_control, Sliding_tackle, Attacking_position, Short_pass and Heading, physical variables such as Reactions, Speed, Strength, Jumping, and Vision, along with a few character traits as well such as Age, Height, and Composure.  This indicates that player ratings are determined by mostly by these select qualities and implies that players need to be well rounded athletes who have mastered the nuances and fundamentals of the game of soccer.
+
+
+
+
+# Appendix
+Note: Our original classification task was to determine if a certain player has "potential" (if a given player has an overall rating of 85 or higher and if the player is 25 or younger.) However, it seems that the variable is extremely related to the other predictors, so extremely high accuracies were received. When we ran the codes, R noted that the algorithm did not converge, which indicates perfect separation.
+
+Note 2: Many of our ensemble methods of random forest and boosting have been commented out and load Rda objects instead because the process of running these models was very time consuming so they were immediately saved to allow for quick reproducibility.
+

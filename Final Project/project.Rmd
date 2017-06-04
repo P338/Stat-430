@@ -1,0 +1,130 @@
+---
+title: "Stat 430 Final Project Proposal"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Group Members:
+  1. Prentice Mui : pmui2
+  2. Xiaolong Shen : xshen22
+  3. Kobe Ng : kobeng2
+
+## Title:
+Fifa Player skill rating analysis
+
+## Description:
+The data set contains a comprehensive list of players that are available in Fifa 2017.  Each player is a row within the data set. There are 53 columns in the data set many of which skill attributes of each individual player.  Some of the attributes are physical such as speed, agility, and acceleration while others are skill based such as dribbling, ball control, and vision.  All attributes are scaled from 0 to 100 with 100 being/having the exceptional or elite prowess of the attribute in question.  Other variables are mor objective based such as player position, age , and nationality.
+
+## Source:
+Data set comes from Kaggle created by user Soumitra Agarwal.  The link is https://www.kaggle.com/artimous/complete-fifa-2017-player-dataset-global.  In turn the csv data was scraped from https://www.fifaindex.com/.
+
+## Learning Task:
+The first learning task that will be applied is a regression in predicting a player's overall rating based on his other attributes and personal details.  The goal is to determine which factors are most important in determining the overall skill level of a soccer player.
+
+The second learning task will be classifying young players who have "potential".  A new binary variable "Potential" will be coded that signifies if the given player is 25 or younger and whether his rating is 85 or higher.  After creating an age categorical variable, an attempt will be made to predict whether a player is age 25 or younger with a rating of 85 or higher based on other attributes.  The goal is to determine which players have potential and are worthing or choosing/supporting in the future.
+
+## Loading the data into R
+```{r, message=FALSE}
+data = read.csv("FullData.csv")
+head(data, n = 10)
+```
+
+  * The data properly loads into R.  Though modifications to the data frame will be made later.
+
+```{r, echo = FALSE, message = FALSE}
+for (i in 1:nrow(data)){
+  if (data$Age[i] <= 25 & data$Rating[i] >= 85) {
+      data$Potential[i] = 1
+  }
+  else data$Potential[i] = 0
+}
+accuracy = function(actual, predicted) {
+  mean(actual == predicted)
+}
+get_accuracy = function(mod, data, res, pos = 1, neg = 0, cut = 0.5) {
+  probs = predict(mod, newdata = data, type = "response")
+  preds = ifelse(probs > cut, pos, neg)
+  mean(data[, res] == preds)
+}
+get_best_result = function(caret_fit) {
+  best_result = caret_fit$results[as.numeric(rownames(caret_fit$bestTune)), ]
+  rownames(best_result) = NULL
+  best_result
+}
+rmse = function(actual, predicted) {
+  sqrt(mean((actual - predicted) ^ 2))
+}
+get_rmse = function(model, data, response) {
+  rmse(actual = data[, response], 
+       predicted = predict(model, data))
+}
+library(caret)
+library(leaps)
+library(tree)
+library(MASS)
+library(ISLR)
+library(randomForest)
+library(gbm)
+library(caret)
+```
+
+## Initial model fitting
+```{r}
+# Fit regression w/ lm
+fit_lm = lm(Rating ~ Weak_foot + Skill_Moves + Ball_Control + Dribbling + Marking + 
+                     Sliding_Tackle + Standing_Tackle +  Aggression + Reactions + 
+                     Attacking_Position + Interceptions + Vision + Composure + Crossing + 
+                     Short_Pass + Long_Pass + Acceleration + Speed + Stamina + Strength + 
+                     Balance + Agility + Jumping + Heading + Shot_Power + Finishing + 
+                     Long_Shots + Curve + Freekick_Accuracy + Penalties + Volleys + GK_Positioning + 
+                     GK_Diving + GK_Kicking + GK_Handling + GK_Reflexes, data = data)
+fit_lm
+
+# Prediction for regression
+fit_lm_pred = predict(fit_lm)
+head(fit_lm_pred, n = 10)
+
+# RMSE for regression
+get_rmse(fit_lm, data, "Rating")
+
+# Fit logistic w/ glm
+fit_glm = glm(Potential ~ Weak_foot + Skill_Moves + Ball_Control + Dribbling + Marking + 
+                          Sliding_Tackle + Standing_Tackle + Aggression + Reactions + 
+                          Attacking_Position + Interceptions + Vision + Composure + 
+                          Crossing + Short_Pass + Long_Pass + Acceleration + Speed + 
+                          Stamina + Strength + Balance + Agility + Jumping + Heading +
+                          Shot_Power + Finishing + Long_Shots + Curve + Freekick_Accuracy + 
+                          Penalties + Volleys + GK_Positioning + GK_Diving + GK_Kicking + 
+                          GK_Handling + GK_Reflexes, data = data)
+
+# Prediction for classification
+fit_glm_predict = predict(fit_glm, type = "response")
+head(fit_glm_predict, n = 10)
+
+# Train Accuracy of logistic model 
+get_accuracy(fit_glm, data = data, res = "Potential")
+```
+
+  * Initial model fitting provides parameter estimates and capably yields predictions for both regression and classification.  Also initial     model fitting has provided preliminary RMSE and accuracy measures. 
+
+
+```{r, echo = FALSE, results = "hide"}
+# Fit regression w/ Caret
+cv_5_grid = trainControl(method = "cv", number = 5)
+lm_reg_fit = train(Rating ~ Weak_foot + Skill_Moves + Ball_Control + Dribbling + Marking + Sliding_Tackle + Standing_Tackle + 
+                            Aggression + Reactions + Attacking_Position + Interceptions + Vision + Composure + Crossing + 
+                            Short_Pass + Long_Pass + Acceleration + Speed + Stamina + Strength + Balance + Agility + Jumping + 
+                            Heading + Shot_Power + Finishing + Long_Shots + Curve + Freekick_Accuracy + Penalties + Volleys + 
+                            GK_Positioning + GK_Diving + GK_Kicking + GK_Handling + GK_Reflexes, data = data, method = "lm", trControl=cv_5_grid)
+lm_reg_fit
+
+fit_reg_pred = predict(lm_reg_fit) 
+head(fit_reg_pred, n = 10)
+```
+
+
+
+
